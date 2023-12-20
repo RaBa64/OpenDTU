@@ -1,15 +1,16 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 /*
- * Copyright (C) 2022 Thomas Basler and others
+ * Copyright (C) 2022-2023 Thomas Basler and others
  */
 #include "WebApi_config.h"
 #include "Configuration.h"
+#include "Utils.h"
 #include "WebApi.h"
 #include "WebApi_errors.h"
 #include <AsyncJson.h>
 #include <LittleFS.h>
 
-void WebApiConfigClass::init(AsyncWebServer* server)
+void WebApiConfigClass::init(AsyncWebServer& server)
 {
     using std::placeholders::_1;
     using std::placeholders::_2;
@@ -18,7 +19,7 @@ void WebApiConfigClass::init(AsyncWebServer* server)
     using std::placeholders::_5;
     using std::placeholders::_6;
 
-    _server = server;
+    _server = &server;
 
     _server->on("/api/config/get", HTTP_GET, std::bind(&WebApiConfigClass::onConfigGet, this, _1));
     _server->on("/api/config/delete", HTTP_POST, std::bind(&WebApiConfigClass::onConfigDelete, this, _1));
@@ -69,7 +70,7 @@ void WebApiConfigClass::onConfigDelete(AsyncWebServerRequest* request)
         return;
     }
 
-    String json = request->getParam("data", true)->value();
+    const String json = request->getParam("data", true)->value();
 
     if (json.length() > 1024) {
         retMsg["message"] = "Data too large!";
@@ -80,7 +81,7 @@ void WebApiConfigClass::onConfigDelete(AsyncWebServerRequest* request)
     }
 
     DynamicJsonDocument root(1024);
-    DeserializationError error = deserializeJson(root, json);
+    const DeserializationError error = deserializeJson(root, json);
 
     if (error) {
         retMsg["message"] = "Failed to parse data!";
@@ -114,7 +115,7 @@ void WebApiConfigClass::onConfigDelete(AsyncWebServerRequest* request)
     request->send(response);
 
     LittleFS.remove(CONFIG_FILENAME);
-    ESP.restart();
+    Utils::restartDtu();
 }
 
 void WebApiConfigClass::onConfigListGet(AsyncWebServerRequest* request)
@@ -157,10 +158,7 @@ void WebApiConfigClass::onConfigUploadFinish(AsyncWebServerRequest* request)
     response->addHeader("Connection", "close");
     response->addHeader("Access-Control-Allow-Origin", "*");
     request->send(response);
-    yield();
-    delay(1000);
-    yield();
-    ESP.restart();
+    Utils::restartDtu();
 }
 
 void WebApiConfigClass::onConfigUpload(AsyncWebServerRequest* request, String filename, size_t index, uint8_t* data, size_t len, bool final)
@@ -175,7 +173,7 @@ void WebApiConfigClass::onConfigUpload(AsyncWebServerRequest* request, String fi
             request->send(500);
             return;
         }
-        String name = "/" + request->getParam("file")->value();
+        const String name = "/" + request->getParam("file")->value();
         request->_tempFile = LittleFS.open(name, "w");
     }
 

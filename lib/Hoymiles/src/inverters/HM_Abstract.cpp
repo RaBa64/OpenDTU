@@ -8,11 +8,12 @@
 #include "commands/AlarmDataCommand.h"
 #include "commands/DevInfoAllCommand.h"
 #include "commands/DevInfoSimpleCommand.h"
+#include "commands/GridOnProFilePara.h"
 #include "commands/PowerControlCommand.h"
 #include "commands/RealTimeRunDataCommand.h"
 #include "commands/SystemConfigParaCommand.h"
 
-HM_Abstract::HM_Abstract(HoymilesRadio* radio, uint64_t serial)
+HM_Abstract::HM_Abstract(HoymilesRadio* radio, const uint64_t serial)
     : InverterAbstract(radio, serial) {};
 
 bool HM_Abstract::sendStatsRequest()
@@ -37,7 +38,7 @@ bool HM_Abstract::sendStatsRequest()
     return true;
 }
 
-bool HM_Abstract::sendAlarmLogRequest(bool force)
+bool HM_Abstract::sendAlarmLogRequest(const bool force)
 {
     if (!getEnablePolling()) {
         return false;
@@ -120,7 +121,7 @@ bool HM_Abstract::sendSystemConfigParaRequest()
     return true;
 }
 
-bool HM_Abstract::sendActivePowerControlRequest(float limit, PowerLimitControlType type)
+bool HM_Abstract::sendActivePowerControlRequest(float limit, const PowerLimitControlType type)
 {
     if (!getEnableCommands()) {
         return false;
@@ -147,7 +148,7 @@ bool HM_Abstract::resendActivePowerControlRequest()
     return sendActivePowerControlRequest(_activePowerControlLimit, _activePowerControlType);
 }
 
-bool HM_Abstract::sendPowerControlRequest(bool turnOn)
+bool HM_Abstract::sendPowerControlRequest(const bool turnOn)
 {
     if (!getEnableCommands()) {
         return false;
@@ -202,4 +203,26 @@ bool HM_Abstract::resendPowerControlRequest()
         return false;
         break;
     }
+}
+
+bool HM_Abstract::sendGridOnProFileParaRequest()
+{
+    if (!getEnablePolling()) {
+        return false;
+    }
+
+    struct tm timeinfo;
+    if (!getLocalTime(&timeinfo, 5)) {
+        return false;
+    }
+
+    time_t now;
+    time(&now);
+
+    auto cmd = _radio->prepareCommand<GridOnProFilePara>();
+    cmd->setTime(now);
+    cmd->setTargetAddress(serial());
+    _radio->enqueCommand(cmd);
+
+    return true;
 }

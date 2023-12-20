@@ -88,6 +88,14 @@
                                     </button>
                                 </div>
 
+                                <div class="btn-group me-2" role="group">
+                                    <button type="button" class="btn btn-sm btn-info"
+                                        @click="onShowGridProfile(inverter.serial)" v-tooltip :title="$t('home.ShowGridProfile')">
+                                        <BIconOutlet style="font-size:24px;" />
+
+                                    </button>
+                                </div>
+
                                 <div class="btn-group" role="group">
                                     <button v-if="inverter.events >= 0" type="button"
                                         class="btn btn-sm btn-secondary position-relative"
@@ -110,7 +118,7 @@
                                         :key="channel">
                                         <template v-if="(chanType.name != 'DC') ||
                                             (chanType.name == 'DC' && getSumIrridiation(inverter) == 0) ||
-                                            (chanType.name == 'DC' && getSumIrridiation(inverter) > 0 && chanType.obj[channel].Irradiation?.v || 0 > 0)
+                                            (chanType.name == 'DC' && getSumIrridiation(inverter) > 0 && chanType.obj[channel].Irradiation?.max || 0 > 0)
                                             ">
                                             <div class="col">
                                                 <InverterChannelInfo :channelData="chanType.obj[channel]"
@@ -173,6 +181,31 @@
                 <div class="modal-footer">
                     <button type="button" class="btn btn-secondary" @click="onHideDevInfo" data-bs-dismiss="modal">{{
                         $t('home.Close') }}</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="modal" id="gridProfileView" tabindex="-1">
+        <div class="modal-dialog modal-lg">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title">{{ $t('home.GridProfile') }}</h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+                </div>
+                <div class="modal-body">
+                    <div class="text-center" v-if="gridProfileLoading">
+                        <div class="spinner-border" role="status">
+                            <span class="visually-hidden">{{ $t('home.Loading') }}</span>
+                        </div>
+                    </div>
+
+                    <GridProfile v-if="!gridProfileLoading" :gridProfileList="gridProfileList" :gridProfileRawList="gridProfileRawList" />
+                </div>
+
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" @click="onHideGridProfile"
+                        data-bs-dismiss="modal">{{ $t('home.Close') }}</button>
                 </div>
             </div>
         </div>
@@ -339,6 +372,7 @@ import BasePage from '@/components/BasePage.vue';
 import BootstrapAlert from '@/components/BootstrapAlert.vue';
 import DevInfo from '@/components/DevInfo.vue';
 import EventLog from '@/components/EventLog.vue';
+import GridProfile from '@/components/GridProfile.vue';
 import HintView from '@/components/HintView.vue';
 import InverterChannelInfo from "@/components/InverterChannelInfo.vue";
 import BarChart from "@/components/BarChart.vue";
@@ -346,6 +380,8 @@ import CalendarChart from "@/components/CalendarChart.vue";
 import InverterTotalInfo from '@/components/InverterTotalInfo.vue';
 import type { DevInfoStatus } from '@/types/DevInfoStatus';
 import type { EventlogItems } from '@/types/EventlogStatus';
+import type { GridProfileStatus } from '@/types/GridProfileStatus';
+import type { GridProfileRawdata } from '@/types/GridProfileRawdata';
 import type { LimitConfig } from '@/types/LimitConfig';
 import type { LimitStatus } from '@/types/LimitStatus';
 import type { Inverter, LiveData } from '@/types/LiveDataStatus';
@@ -357,6 +393,7 @@ import {
     BIconCpu,
     BIconExclamationCircleFill,
     BIconJournalText,
+    BIconOutlet,
     BIconPower,
     BIconSpeedometer,
     BIconToggleOff,
@@ -371,6 +408,7 @@ export default defineComponent({
         BootstrapAlert,
         DevInfo,
         EventLog,
+        GridProfile,
         HintView,
         InverterChannelInfo,
         BarChart,
@@ -381,6 +419,7 @@ export default defineComponent({
         BIconCpu,
         BIconExclamationCircleFill,
         BIconJournalText,
+        BIconOutlet,
         BIconPower,
         BIconSpeedometer,
         BIconToggleOff,
@@ -403,6 +442,10 @@ export default defineComponent({
             devInfoView: {} as bootstrap.Modal,
             devInfoList: {} as DevInfoStatus,
             devInfoLoading: true,
+            gridProfileView: {} as bootstrap.Modal,
+            gridProfileList: {} as GridProfileStatus,
+            gridProfileRawList: {} as GridProfileRawdata,
+            gridProfileLoading: true,
 
             limitSettingView: {} as bootstrap.Modal,
             limitSettingLoading: true,
@@ -410,7 +453,7 @@ export default defineComponent({
             currentLimitList: {} as LimitStatus,
             targetLimitList: {} as LimitConfig,
 
-            targetLimitMin: 2,
+            targetLimitMin: 0,
             targetLimitMax: 100,
             targetLimitTypeText: this.$t('home.Relative'),
             targetLimitType: 1,
@@ -443,6 +486,7 @@ export default defineComponent({
     mounted() {
         this.eventLogView = new bootstrap.Modal('#eventView');
         this.devInfoView = new bootstrap.Modal('#devInfoView');
+        this.gridProfileView = new bootstrap.Modal('#gridProfileView');
         this.limitSettingView = new bootstrap.Modal('#limitSettingView');
         this.powerSettingView = new bootstrap.Modal('#powerSettingView');
 
@@ -507,9 +551,15 @@ export default defineComponent({
 
             this.socket.onmessage = (event) => {
                 console.log(event);
-                this.liveData = JSON.parse(event.data);
-                this.dataLoading = false;
-                this.heartCheck(); // Reset heartbeat detection
+                if (event.data != "{}") {
+                    this.liveData = JSON.parse(event.data);
+                    this.dataLoading = false;
+                    this.heartCheck(); // Reset heartbeat detection
+                } else {
+                    // Sometimes it does not recover automatically so have to force a reconnect
+                    this.closeSocket();
+                    this.heartCheck(10); // Reconnect faster
+                }
             };
 
             this.socket.onopen = function (event) {
@@ -532,7 +582,7 @@ export default defineComponent({
             }, 1000);
         },
         // Send heartbeat packets regularly * 59s Send a heartbeat
-        heartCheck() {
+        heartCheck(duration: number = 59) {
             this.heartInterval && clearTimeout(this.heartInterval);
             this.heartInterval = setInterval(() => {
                 if (this.socket.readyState === 1) {
@@ -541,7 +591,7 @@ export default defineComponent({
                 } else {
                     this.initSocket(); // Breakpoint reconnection 5 Time
                 }
-            }, 59 * 1000);
+            }, duration * 1000);
         },
         /** To break off websocket Connect */
         closeSocket() {
@@ -554,7 +604,7 @@ export default defineComponent({
         },
         onShowEventlog(serial: number) {
             this.eventLogLoading = true;
-            fetch("/api/eventlog/status?inv=" + serial, { headers: authHeader() })
+            fetch("/api/eventlog/status?inv=" + serial + "&locale=" + this.$i18n.locale, { headers: authHeader() })
                 .then((response) => handleResponse(response, this.$emitter, this.$router))
                 .then((data) => {
                     this.eventLogList = data;
@@ -577,6 +627,26 @@ export default defineComponent({
                 });
 
             this.devInfoView.show();
+        },
+        onHideGridProfile() {
+            this.devInfoView.hide();
+        },
+        onShowGridProfile(serial: number) {
+            this.gridProfileLoading = true;
+            fetch("/api/gridprofile/status?inv=" + serial, { headers: authHeader() })
+                .then((response) => handleResponse(response, this.$emitter, this.$router))
+                .then((data) => {
+                    this.gridProfileList = data;
+
+                    fetch("/api/gridprofile/rawdata?inv=" + serial, { headers: authHeader() })
+                    .then((response) => handleResponse(response, this.$emitter, this.$router))
+                    .then((data) => {
+                        this.gridProfileRawList = data;
+                        this.gridProfileLoading = false;
+                    })
+                });
+
+            this.gridProfileView.show();
         },
         onHideLimitSettings() {
             this.showAlertLimit = false;
@@ -631,11 +701,11 @@ export default defineComponent({
         onSelectType(type: number) {
             if (type == 1) {
                 this.targetLimitTypeText = this.$t('home.Relative');
-                this.targetLimitMin = 2;
+                this.targetLimitMin = 0;
                 this.targetLimitMax = 100;
             } else {
                 this.targetLimitTypeText = this.$t('home.Absolute');
-                this.targetLimitMin = 10;
+                this.targetLimitMin = 0;
                 this.targetLimitMax = (this.currentLimitList.max_power > 0 ? this.currentLimitList.max_power : 2250);
             }
             this.targetLimitType = type;
@@ -702,10 +772,17 @@ export default defineComponent({
         getSumIrridiation(inv: Inverter): number {
             let total = 0;
             Object.keys(inv.DC).forEach((key) => {
-                total += inv.DC[key as unknown as number].Irradiation?.v || 0;
+                total += inv.DC[key as unknown as number].Irradiation?.max || 0;
             });
             return total;
         }
     },
 });
 </script>
+
+<style>
+.btn-group {
+    border-radius: var(--bs-border-radius);
+    margin-top: 0.25rem;
+}
+</style>

@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 /*
- * Copyright (C) 2022 Thomas Basler and others
+ * Copyright (C) 2022-2023 Thomas Basler and others
  */
 #include "WebApi_ws_live.h"
 #include "Configuration.h"
@@ -15,7 +15,7 @@ WebApiWsLiveClass::WebApiWsLiveClass()
 {
 }
 
-void WebApiWsLiveClass::init(AsyncWebServer* server)
+void WebApiWsLiveClass::init(AsyncWebServer& server)
 {
     using std::placeholders::_1;
     using std::placeholders::_2;
@@ -24,7 +24,7 @@ void WebApiWsLiveClass::init(AsyncWebServer* server)
     using std::placeholders::_5;
     using std::placeholders::_6;
 
-    _server = server;
+    _server = &server;
     _server->on("/api/livedata/status", HTTP_GET, std::bind(&WebApiWsLiveClass::onLivedataStatus, this, _1));
 
     _server->addHandler(&_ws);
@@ -62,7 +62,8 @@ void WebApiWsLiveClass::loop()
     if (millis() - _lastWsPublish > (10 * 1000) || (maxTimeStamp != _newestInverterTimestamp)) {
 
         try {
-            DynamicJsonDocument root(40960);
+            std::lock_guard<std::mutex> lock(_mutex);
+            DynamicJsonDocument root(4096 * INV_MAX_COUNT);
             JsonVariant var = root;
             generateJsonResponse(var);
 
@@ -70,10 +71,10 @@ void WebApiWsLiveClass::loop()
             if (buffer) {
                 serializeJson(root, buffer);
 
-                if (Configuration.get().Security_AllowReadonly) {
+                if (Configuration.get().Security.AllowReadonly) {
                     _ws.setAuthentication("", "");
                 } else {
-                    _ws.setAuthentication(AUTH_USERNAME, Configuration.get().Security_Password);
+                    _ws.setAuthentication(AUTH_USERNAME, Configuration.get().Security.Password);
                 }
 
                 _ws.textAll(buffer);
@@ -146,6 +147,7 @@ void WebApiWsLiveClass::generateJsonResponse(JsonVariant& root)
                 addField(chanTypeObj, i, inv, t, c, FLD_EFF);
                 if (t == TYPE_DC && inv->Statistics()->getStringMaxPower(c) > 0) {
                     addField(chanTypeObj, i, inv, t, c, FLD_IRR);
+                    chanTypeObj[String(c)][inv->Statistics()->getChannelFieldName(t, c, FLD_IRR)]["max"] = inv->Statistics()->getStringMaxPower(c);
                 }
             }
         }
@@ -170,14 +172,14 @@ void WebApiWsLiveClass::generateJsonResponse(JsonVariant& root)
     struct tm timeinfo;
     hintObj["time_sync"] = !getLocalTime(&timeinfo, 5);
     hintObj["radio_problem"] = (Hoymiles.getRadioNrf()->isInitialized() && (!Hoymiles.getRadioNrf()->isConnected() || !Hoymiles.getRadioNrf()->isPVariant())) || (Hoymiles.getRadioCmt()->isInitialized() && (!Hoymiles.getRadioCmt()->isConnected()));
-    if (!strcmp(Configuration.get().Security_Password, ACCESS_POINT_PASSWORD)) {
+    if (!strcmp(Configuration.get().Security.Password, ACCESS_POINT_PASSWORD)) {
         hintObj["default_password"] = true;
     } else {
         hintObj["default_password"] = false;
     }
 }
 
-void WebApiWsLiveClass::addField(JsonObject& root, uint8_t idx, std::shared_ptr<InverterAbstract> inv, ChannelType_t type, ChannelNum_t channel, FieldId_t fieldId, String topic)
+void WebApiWsLiveClass::addField(JsonObject& root, uint8_t idx, std::shared_ptr<InverterAbstract> inv, const ChannelType_t type, const ChannelNum_t channel, const FieldId_t fieldId, String topic)
 {
     if (inv->Statistics()->hasChannelFieldValue(type, channel, fieldId)) {
         String chanName;
@@ -194,7 +196,7 @@ void WebApiWsLiveClass::addField(JsonObject& root, uint8_t idx, std::shared_ptr<
     }
 }
 
-void WebApiWsLiveClass::addTotalField(JsonObject& root, String name, float value, String unit, uint8_t digits)
+void WebApiWsLiveClass::addTotalField(JsonObject& root, const String& name, const float value, const String& unit, const uint8_t digits)
 {
     root[name]["v"] = value;
     root[name]["u"] = unit;
@@ -204,13 +206,9 @@ void WebApiWsLiveClass::addTotalField(JsonObject& root, String name, float value
 void WebApiWsLiveClass::onWebsocketEvent(AsyncWebSocket* server, AsyncWebSocketClient* client, AwsEventType type, void* arg, uint8_t* data, size_t len)
 {
     if (type == WS_EVT_CONNECT) {
-        char str[64];
-        snprintf(str, sizeof(str), "Websocket: [%s][%u] connect", server->url(), client->id());
-        MessageOutput.println(str);
+        MessageOutput.printf("Websocket: [%s][%u] connect\r\n", server->url(), client->id());
     } else if (type == WS_EVT_DISCONNECT) {
-        char str[64];
-        snprintf(str, sizeof(str), "Websocket: [%s][%u] disconnect", server->url(), client->id());
-        MessageOutput.println(str);
+        MessageOutput.printf("Websocket: [%s][%u] disconnect\r\n", server->url(), client->id());
     }
 }
 
@@ -221,7 +219,8 @@ void WebApiWsLiveClass::onLivedataStatus(AsyncWebServerRequest* request)
     }
 
     try {
-        AsyncJsonResponse* response = new AsyncJsonResponse(false, 40960U);
+        std::lock_guard<std::mutex> lock(_mutex);
+        AsyncJsonResponse* response = new AsyncJsonResponse(false, 4096 * INV_MAX_COUNT);
         JsonVariant root = response->getRoot();
 
         generateJsonResponse(root);
